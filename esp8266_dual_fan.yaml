@@ -1,0 +1,248 @@
+substitutions:
+  FAN1_TACH: GPIO13
+  FAN1_PWM: GPIO14
+  FAN1_MIN: "0.15"
+  FAN1_MAX: "1.0"
+
+  FAN2_TACH: GPIO12
+  FAN2_PWM: GPIO16
+  FAN2_MIN: "0.15"
+  FAN2_MAX: "1.0"
+
+esphome:
+  name: esp8266fans
+  friendly_name: "ESP8266 Fans"
+
+esp8266:
+  board: d1_mini
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: "***"
+
+ota:
+  - platform: esphome
+    password: "***"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 10.35.0.12
+  domain: !secret domain
+  output_power: 20.5dB
+  reboot_timeout: 0s
+  manual_ip:
+    static_ip: 10.35.0.12
+    gateway: 10.35.0.1
+    subnet: 255.255.255.0
+    dns1: 10.35.0.1
+  ap:
+    ssid: "ESP8266 Fans Fallback Hotspot"
+    password: "***"
+
+captive_portal:
+
+logger:
+  level: INFO
+  logs:
+    update_pwm_duty1: INFO
+    update_pwm_duty2: INFO
+
+preferences:
+  flash_write_interval: 15min
+
+mdns:
+  disabled: true
+
+web_server:
+  version: 3
+  port: 80
+  sorting_groups:
+    - id: sorting_group_controller
+      name: "Controller"
+      sorting_weight: 10
+    - id: sorting_group_fan1
+      name: "Fan 1"
+      sorting_weight: 20
+    - id: sorting_group_fan2
+      name: "Fan 2"
+      sorting_weight: 30
+
+button:
+  - platform: restart
+    name: "Restart the Microcontroller"
+    web_server:
+      sorting_group_id: sorting_group_controller
+      sorting_weight: 60
+  - platform: factory_reset
+    name: "Restart with Factory Default Settings"
+    web_server:
+      sorting_group_id: sorting_group_controller
+      sorting_weight: 70
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      web_server:
+        sorting_group_id: sorting_group_controller
+      icon: mdi:ip-network-outline
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal Strength"
+    web_server:
+      sorting_group_id: sorting_group_controller
+    icon: mdi:access-point-network
+    update_interval: 60s
+
+  - platform: pulse_counter
+    pin:
+      number: ${FAN1_TACH}
+      mode: INPUT_PULLUP
+    unit_of_measurement: "RPM"
+    id: fan1_tach
+    name: "Fan 1 Tach"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+    icon: mdi:gauge
+    accuracy_decimals: 0
+    filters:
+      - multiply: 0.5
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: DISABLE
+    update_interval: 500ms
+    on_value:
+      if:
+        condition:
+          - script.is_running: update_pwm_duty1
+        else:
+          - script.execute: update_pwm_duty1
+
+  - platform: pulse_counter
+    pin:
+      number: ${FAN2_TACH}
+      mode: INPUT_PULLUP
+    unit_of_measurement: "RPM"
+    id: fan2_tach
+    name: "Fan 2 Tach"
+    web_server:
+      sorting_group_id: sorting_group_fan2
+    icon: mdi:gauge
+    accuracy_decimals: 0
+    filters:
+      - multiply: 0.5
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: DISABLE
+    update_interval: 500ms
+    on_value:
+      if:
+        condition:
+          - script.is_running: update_pwm_duty2
+        else:
+          - script.execute: update_pwm_duty2
+
+  - platform: template
+    name: "Fan 1 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 60
+    icon: mdi:percent-outline
+    unit_of_measurement: "%"
+    id: fan1_duty
+
+  - platform: template
+    name: "Fan 2 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan2
+      sorting_weight: 60
+    icon: mdi:percent-outline
+    unit_of_measurement: "%"
+    id: fan2_duty
+
+output:
+  - platform: esp8266_pwm
+    id: fan1_pwm
+    pin: ${FAN1_PWM}
+    frequency: 25000Hz
+    min_power: ${FAN1_MIN}
+    max_power: ${FAN1_MAX}
+
+  - platform: esp8266_pwm
+    id: fan2_pwm
+    pin: ${FAN2_PWM}
+    frequency: 25000Hz
+    min_power: ${FAN2_MIN}
+    max_power: ${FAN2_MAX}
+
+fan:
+  - platform: template
+    id: manual_fan1_control
+    entity_category: config
+    name: "Manual Fan 1 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 80
+    icon: mdi:knob
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+
+  - platform: template
+    id: manual_fan2_control
+    entity_category: config
+    name: "Manual Fan 2 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan2
+      sorting_weight: 80
+    icon: mdi:knob
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+
+globals:
+  - id: out_pwm_duty1
+    type: float
+    initial_value: "50.0"
+
+  - id: out_pwm_duty2
+    type: float
+    initial_value: "50.0"
+
+script:
+  - id: update_pwm_duty1
+    then:
+    - lambda: |-
+        //float pwm_duty = (id(manual_fan1_control).state) ? id(manual_fan1_control).speed / 100.0 : id(in_duty_cycle1).state / 100.0;
+        float pwm_duty = id(manual_fan1_control).speed / 100.0;
+        if(id(out_pwm_duty1) != pwm_duty) {
+          ESP_LOGI("update_pwm_duty1", "out_pwm_duty1 changed. was: %.1f now: %.1f", id(out_pwm_duty1) * 100.0, pwm_duty * 100.0);
+          id(out_pwm_duty1) = pwm_duty;
+          id(update_fan1_pwm).execute();
+        }
+
+  - id: update_fan1_pwm
+    then:
+    - lambda: |-
+        id(fan1_pwm).update_frequency(25000);
+        id(fan1_pwm).set_level(id(out_pwm_duty1));
+        id(fan1_duty).publish_state(id(out_pwm_duty1) * 100.0);
+
+  - id: update_pwm_duty2
+    then:
+    - lambda: |-
+        //float pwm_duty = (id(manual_fan2_control).state) ? id(manual_fan2_control).speed / 100.0 : id(in_duty_cycle2).state / 100.0;        
+        float pwm_duty = id(manual_fan2_control).speed / 100.0;
+        if(id(out_pwm_duty2) != pwm_duty) {
+          ESP_LOGI("update_pwm_duty2", "out_pwm_duty2 changed. was: %.1f now: %.1f", id(out_pwm_duty2) * 100.0, pwm_duty * 100.0);
+          id(out_pwm_duty2) = pwm_duty;
+          id(update_fan2_pwm).execute();
+        }
+
+  - id: update_fan2_pwm
+    then:
+    - lambda: |-
+        id(fan2_pwm).update_frequency(25000);
+        id(fan2_pwm).set_level(id(out_pwm_duty2));
+        id(fan2_duty).publish_state(id(out_pwm_duty2) * 100.0);

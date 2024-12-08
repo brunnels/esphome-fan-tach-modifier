@@ -1,0 +1,247 @@
+substitutions:
+  FAN1_TACH: GPIO4
+  FAN1_DUTY_MULTIPIER: "0.65"
+  FAN1_PWM: GPIO3
+  FAN1_MIN: "0.15"
+  FAN1_MAX: "1.0"
+  OUT_TACH1: GPIO1
+  OUT_TACH1_MAX_RPM: "23000"
+  DUTY1: GPIO0
+
+esphome:
+  name: ps1
+  friendly_name: PS1
+
+esp32:
+  board: esp32-c3-devkitm-1
+  framework:
+    type: arduino
+
+api:
+  reboot_timeout: 0s
+  encryption:
+    key: "***"
+
+ota:
+  - platform: esphome
+    password: "***"
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+  use_address: 10.35.0.17
+  domain: !secret domain
+  output_power: 20.5dB
+  reboot_timeout: 0s
+  manual_ip:
+    static_ip: 10.35.0.17
+    gateway: 10.35.0.1
+    subnet: 255.255.255.0
+    dns1: 10.35.0.1
+  ap:
+    ssid: "PS1 Fallback Hotspot"
+    password: "***"
+
+captive_portal:
+
+logger:
+  level: INFO
+  logs:
+    update_pwm_duty1: WARN
+    update_out_tach1_freq: WARN
+    update_out_tach1: ERROR
+
+preferences:
+  flash_write_interval: 15min
+
+mdns:
+  disabled: true
+
+web_server:
+  version: 3
+  port: 80
+  sorting_groups:
+    - id: sorting_group_controller
+      name: "Controller"
+      sorting_weight: 10
+    - id: sorting_group_fan1
+      name: "Fan 1"
+      sorting_weight: 20
+
+button:
+  - platform: restart
+    name: "Restart the Microcontroller"
+    web_server:
+      sorting_group_id: sorting_group_controller
+      sorting_weight: 60
+  - platform: factory_reset
+    name: "Restart with Factory Default Settings"
+    web_server:
+      sorting_group_id: sorting_group_controller
+      sorting_weight: 70
+
+text_sensor:
+  - platform: wifi_info
+    ip_address:
+      name: "IP Address"
+      web_server:
+        sorting_group_id: sorting_group_controller
+      icon: mdi:ip-network-outline
+
+sensor:
+  - platform: wifi_signal
+    name: "WiFi Signal Strength"
+    web_server:
+      sorting_group_id: sorting_group_controller
+    icon: mdi:access-point-network
+    update_interval: 60s
+
+  - platform: template
+    name: "Output Tach 1"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 10
+    icon: mdi:gauge
+    unit_of_measurement: "RPM"
+    id: out_tach1_rpm
+
+  - platform: template
+    name: "Fan 1 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 60
+    icon: mdi:percent-outline
+    unit_of_measurement: "%"
+    id: fan1_duty
+
+  - platform: pulse_counter
+    pin:
+      number: ${FAN1_TACH}
+      mode: INPUT_PULLUP
+    unit_of_measurement: "RPM"
+    id: fan1_tach
+    name: "Fan 1 Tach"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+    icon: mdi:gauge
+    use_pcnt: true
+    accuracy_decimals: 0
+    filters:
+      - multiply: 0.5
+    count_mode:
+      rising_edge: INCREMENT
+      falling_edge: DISABLE
+    update_interval: 500ms
+
+  - platform: duty_cycle
+    pin: ${DUTY1}
+    name: "Duty Cycle Sensor 1"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 20
+    icon: mdi:percent-outline
+    id: in_duty_cycle1
+    update_interval: 500ms
+    filters:
+      - round: 1
+    on_value:
+      if:
+        condition:
+          - script.is_running: update_out_tach1_freq
+        else:
+          - script.execute: update_out_tach1_freq
+
+output:
+  - platform: ledc
+    id: fan1_pwm
+    pin: ${FAN1_PWM}
+    channel: 0
+    frequency: 25000Hz
+    min_power: ${FAN1_MIN}
+    max_power: ${FAN1_MAX}
+
+  - platform: ledc
+    id: out_tach1
+    pin: ${OUT_TACH1}
+    channel: 4
+    inverted: true
+    min_power: 0.5
+    max_power: 0.5
+
+fan:
+  - platform: template
+    id: manual_tach1
+    entity_category: config
+    name: "Manual Output Tach 1 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 70
+    icon: mdi:knob
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_OFF
+
+  - platform: template
+    id: manual_fan1_control
+    entity_category: config
+    name: "Manual Fan 1 Duty Cycle"
+    web_server:
+      sorting_group_id: sorting_group_fan1
+      sorting_weight: 80
+    icon: mdi:knob
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_OFF
+
+globals:
+  - id: out_tach1_freq
+    type: float
+    initial_value: "0.0"
+
+  - id: out_pwm_duty1
+    type: float
+    initial_value: "0.0"
+
+script:
+  - id: update_pwm_duty1
+    then:
+    - lambda: |-
+        float pwm_duty = (id(manual_fan1_control).state) ? id(manual_fan1_control).speed / 100.0 : id(in_duty_cycle1).state / 100.0;        
+        if(id(out_pwm_duty1) != pwm_duty) {
+          ESP_LOGI("update_pwm_duty1", "out_pwm_duty1 changed. was: %.1f now: %.1f", id(out_pwm_duty1) * 100.0, pwm_duty * 100.0);
+          id(out_pwm_duty1) = pwm_duty;
+          id(update_fan1_pwm).execute();
+        }
+
+  - id: update_out_tach1_freq
+    then:
+    - lambda: |-
+        id(update_pwm_duty1).execute();
+        float percentage = (id(manual_tach1).state ? id(manual_tach1).speed : id(fan1_duty).state) / 100.0;
+        float freq = (percentage * ${OUT_TACH1_MAX_RPM}) / 30.0;
+        // drop the decimals
+        freq = ((int)freq * 10) / 10.0;       
+        if(id(out_tach1_freq) != freq) {
+          ESP_LOGI("update_out_tach1_freq", "out_tach1_freq changed. was: %.0f now: %.0f", id(out_tach1_freq), freq);
+          id(out_tach1_freq) = freq;
+          id(update_out_tach1).execute();          
+        }
+
+  - id: update_fan1_pwm
+    then:
+    - lambda: |-
+        id(fan1_pwm).update_frequency(25000);
+        id(fan1_pwm).set_level(id(out_pwm_duty1) * ${FAN1_DUTY_MULTIPIER});
+        id(fan1_duty).publish_state(id(out_pwm_duty1) * 100.0);
+
+  - id: update_out_tach1
+    then:
+    - lambda: |-
+        // if the fan tach stops always stop sending out_tach
+        if(id(out_tach1_freq) < 1.0 || id(fan1_tach).state * 1.0 < 5.0) {
+          ESP_LOGE("update_out_tach1", "out_tach1_freq %.0f or fan1_tach %.1f invalid! stopping out_tach1!", out_tach1_freq, id(fan1_tach).state * 1.0);
+          id(out_tach1).turn_off();
+          id(out_tach1_rpm).publish_state(0);
+        } else {
+          id(out_tach1).turn_on();
+          id(out_tach1).update_frequency(id(out_tach1_freq));
+          id(out_tach1_rpm).publish_state(id(out_tach1_freq) * 30);
+        }
