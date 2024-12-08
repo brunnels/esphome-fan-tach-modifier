@@ -249,7 +249,7 @@ output:
   - platform: ledc
     id: out_tach2
     pin: ${OUT_TACH2}
-    channel: 6
+    channel: 5
     inverted: true
     min_power: 0.5
     max_power: 0.5
